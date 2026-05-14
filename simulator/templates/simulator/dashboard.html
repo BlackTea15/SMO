@@ -1,0 +1,325 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Симулятор операции</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Manrope:wght@400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{% static 'simulator/css/dashboard.css' %}">
+</head>
+<body>
+<div class="page" id="simulator-app"
+     data-step-url="{% url 'simulator:simulate_step' scenario_id %}"
+     data-state-url="{% url 'simulator:scenario_state' scenario_id %}"
+     data-resupply-url="{% url 'simulator:resupply' scenario_id %}"
+     data-report-url="{% url 'simulator:generate_report' scenario_id %}"
+     data-complete-url="{% url 'simulator:complete' scenario_id %}"
+     data-restart-url="{% url 'simulator:restart' scenario_id %}">
+    <form class="csrf-holder" aria-hidden="true">{% csrf_token %}</form>
+
+    <header class="card hero">
+        <div class="hero-left">
+            <p class="badge">Учебный режим</p>
+            <h1>{{ operation_name }}</h1>
+            <p class="hero-meta">Обновлено: <span id="last-sync">{{ last_sync }}</span></p>
+            <p class="hero-phase" id="current-phase">Текущая фаза: {{ phase }}</p>
+        </div>
+        <div class="hero-kpis" id="kpi-grid">
+            {% for kpi in kpis %}
+                <article class="kpi" data-kpi-id="{{ kpi.id }}">
+                    <span>{{ kpi.name }}</span>
+                    <strong>{{ kpi.value }}</strong>
+                </article>
+            {% endfor %}
+        </div>
+    </header>
+
+    <section class="card status-card" id="operation-status" data-status="{{ status }}">
+        <div class="status-main">
+            <h2>Статус операции</h2>
+            <p class="status-label" id="operation-status-label">{{ status_label }}</p>
+            <p class="status-reason" id="operation-end-reason">
+                {% if end_reason %}
+                    {{ end_reason }}
+                {% else %}
+                    Операция активна. Следуйте этапам и контролируйте снабжение.
+                {% endif %}
+            </p>
+        </div>
+        <div class="status-side">
+            <div class="status-chip">
+                Резерв припасов: <strong id="reserve-value">{{ reserve_supplies }}</strong>
+            </div>
+            <div class="status-chip">
+                Цели: <strong id="objective-summary">{{ summary.completed_objectives }}/{{ summary.total_objectives }}</strong>
+            </div>
+            <p class="next-action-line">Следующее действие: <strong id="next-action">{{ next_action_hint }}</strong></p>
+        </div>
+    </section>
+
+    <section class="card final-screen{% if not is_game_over %} is-hidden{% endif %}" id="final-screen">
+        <div class="final-header">
+            <h2>Итоги операции</h2>
+            <p class="final-status" id="final-status">{{ final_summary.status_label }}</p>
+        </div>
+        <p class="final-reason" id="final-reason">
+            {% if final_summary.end_reason %}
+                {{ final_summary.end_reason }}
+            {% else %}
+                Операция еще не завершена. Этот экран будет заполнен после победы или поражения.
+            {% endif %}
+        </p>
+        <div class="final-grid">
+            <div class="final-item">Шаги: <strong id="final-steps">{{ final_summary.steps_used }}/{{ final_summary.steps_limit }}</strong></div>
+            <div class="final-item">Цели: <strong id="final-objectives">{{ final_summary.completed_objectives }}/{{ final_summary.total_objectives }}</strong></div>
+            <div class="final-item">Готовность: <strong id="final-readiness">{{ final_summary.readiness_avg }}%</strong></div>
+            <div class="final-item">Снабжение: <strong id="final-supply">{{ final_summary.supply_avg }}%</strong></div>
+            <div class="final-item">Мораль: <strong id="final-morale">{{ final_summary.morale_avg }}%</strong></div>
+            <div class="final-item">Риск: <strong id="final-risk">{{ final_summary.risk_label }} ({{ final_summary.risk_score }})</strong></div>
+        </div>
+        <p class="final-advice" id="final-advice">{{ final_summary.advice }}</p>
+        <button id="final-restart-btn" class="simulate-btn danger final-restart-btn" type="button">Начать заново</button>
+    </section>
+
+    <section class="card onboarding">
+        <div class="onboarding-grid">
+            <article class="guide-block">
+                <h2>Что требуется от пользователя</h2>
+                <ul class="guide-list">
+                    <li>Выставить темп и точность разведки.</li>
+                    <li>Выполнить шаг симуляции и оценить риск.</li>
+                    <li>При падении снабжения запросить припасы из источника.</li>
+                    <li>При выполнении всех целей нажать «Завершить операцию».</li>
+                </ul>
+            </article>
+            <article class="guide-block">
+                <h2>После выполнения целей</h2>
+                <ol class="guide-list numbered">
+                    <li>Проверьте, что все цели отмечены как выполненные.</li>
+                    <li>Нажмите кнопку «Завершить операцию».</li>
+                    <li>При ошибке или поражении используйте «Перезапуск» для новой попытки.</li>
+                </ol>
+            </article>
+        </div>
+        <details class="manual-details">
+            <summary>Краткое руководство и условия окончания игры</summary>
+            <div class="manual-content">
+                <p><strong>Поражение</strong> наступает при 0% снабжения у подразделения или при истечении лимита шагов с невыполненными целями.</p>
+                <p><strong>Победа</strong> фиксируется вручную после выполнения всех целей кнопкой завершения.</p>
+                <p>Цель по отчету закрывается кнопкой <strong>«Сформировать отчет»</strong> после 2+ шагов.</p>
+                <p>Кнопка <strong>«Перезапуск»</strong> сбрасывает сценарий к стартовым параметрам.</p>
+            </div>
+        </details>
+    </section>
+
+    <section class="card telemetry">
+        <h2>Техническая телеметрия</h2>
+        <div class="telemetry-grid">
+            <div>
+                <span>Шаг</span>
+                <strong id="telemetry-step">{{ step_number }}</strong>
+            </div>
+            <div>
+                <span>Погодный индекс</span>
+                <strong id="telemetry-weather">{{ weather_index }}</strong>
+            </div>
+            <div>
+                <span>Индекс давления</span>
+                <strong id="telemetry-pressure">{{ pressure_index }}</strong>
+            </div>
+            <div>
+                <span>Risk Score</span>
+                <strong id="telemetry-risk-score">{{ risk_score }}</strong>
+            </div>
+        </div>
+        <div class="index-guides">
+            <article class="index-card">
+                <h3>Погодный индекс: <span id="weather-level">{{ index_guides.weather.level }}</span></h3>
+                <p id="weather-impact">{{ index_guides.weather.impact }}</p>
+                <small>Смотрите первым делом при планировании пополнения припасов.</small>
+            </article>
+            <article class="index-card">
+                <h3>Индекс давления: <span id="pressure-level">{{ index_guides.pressure.level }}</span></h3>
+                <p id="pressure-impact">{{ index_guides.pressure.impact }}</p>
+                <small>Если высокий, снижайте темп и избегайте лишних шагов подряд.</small>
+            </article>
+        </div>
+    </section>
+
+    <section class="card timeline" aria-label="Этапы" id="timeline">
+        {% for stage in timeline %}
+            <button class="timeline-step {% if stage.status == 'active' %}is-active{% elif stage.status == 'done' %}is-done{% endif %}" data-stage="{{ stage.name }}" type="button">
+                <span class="step-index">{{ forloop.counter }}</span>
+                <span>{{ stage.name }}</span>
+            </button>
+        {% endfor %}
+    </section>
+
+    <main class="main-grid">
+        <aside class="card side-panel">
+            <h2>Подразделения</h2>
+            <ul class="unit-list" id="unit-list">
+                {% for unit in units %}
+                    <li class="unit-item" data-unit-id="{{ unit.id }}">
+                        <div class="unit-head">
+                            <strong>{{ unit.name }}</strong>
+                            <span>{{ unit.type }}</span>
+                        </div>
+                        <div class="meter">
+                            <label>Готовность <span class="value-readiness">{{ unit.readiness }}%</span></label>
+                            <div class="bar"><span class="bar-readiness" style="width: {{ unit.readiness }}%"></span></div>
+                        </div>
+                        <div class="meter">
+                            <label>Снабжение <span class="value-supply">{{ unit.supply }}%</span></label>
+                            <div class="bar"><span class="bar-supply" style="width: {{ unit.supply }}%"></span></div>
+                        </div>
+                        <div class="meter">
+                            <label>Мораль <span class="value-morale">{{ unit.morale }}%</span></label>
+                            <div class="bar"><span class="bar-morale" style="width: {{ unit.morale }}%"></span></div>
+                        </div>
+                    </li>
+                {% endfor %}
+            </ul>
+        </aside>
+
+        <section class="card map-panel">
+            <div class="map-header">
+                <h2>Операционная карта</h2>
+                <div class="intel-pill">Разведданные: <strong id="intel-value">{{ intel_confidence }}%</strong></div>
+            </div>
+            <div class="map-shell" id="map-shell">
+                <div class="grid-overlay" aria-hidden="true"></div>
+                <div class="sector-marker marker-a">A3</div>
+                <div class="sector-marker marker-b">C7</div>
+                <div class="sector-marker marker-c">D2</div>
+                {% for unit in units %}
+                    <button type="button"
+                            class="map-unit"
+                            data-map-unit-id="{{ unit.id }}"
+                            style="left: {{ unit.pos_x }}%; top: {{ unit.pos_y }}%;">
+                        {{ unit.name }}
+                    </button>
+                {% endfor %}
+            </div>
+
+            <div class="controls">
+                <label class="control">
+                    Точность разведки: <strong id="intel-slider-value">{{ intel_confidence }}%</strong>
+                    <input id="intel-range" type="range" min="30" max="100" value="{{ intel_confidence }}">
+                </label>
+                <label class="control">
+                    Темп операции: <strong id="tempo-value">{{ tempo }}</strong>
+                    <input id="tempo-range" type="range" min="1" max="5" value="{{ tempo }}">
+                </label>
+                <div class="control">
+                    <label for="resupply-source">Источник припасов</label>
+                    <select id="resupply-source">
+                        {% for source in supply_sources %}
+                            <option value="{{ source.id }}">
+                                {{ source.name }} (стоимость {{ source.cost }}, +{{ source.gain }}%, успех {{ source.success_rate }}%)
+                            </option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
+
+            <div class="action-row">
+                <button id="simulate-btn" class="simulate-btn" type="button">Запустить шаг</button>
+                <button id="resupply-btn" class="simulate-btn secondary" type="button">Запросить припасы</button>
+                <button id="report-btn" class="simulate-btn secondary" type="button">Сформировать отчет</button>
+                <button id="complete-btn" class="simulate-btn secondary" type="button">Завершить операцию</button>
+                <button id="restart-btn" class="simulate-btn danger" type="button">Перезапуск</button>
+            </div>
+            <p class="simulate-status" id="simulate-status" aria-live="polite">Система готова к работе.</p>
+        </section>
+
+        <aside class="card side-panel">
+            <h2>События</h2>
+            <ul class="event-list" id="event-list">
+                {% for event in events %}
+                    <li class="event event-{{ event.level }}">
+                        <span class="event-time">{{ event.time }}</span>
+                        <div>
+                            <strong>{{ event.title }}</strong>
+                            <p>{{ event.description }}</p>
+                        </div>
+                    </li>
+                {% endfor %}
+            </ul>
+        </aside>
+    </main>
+
+    <section class="card extra-grid">
+        <article class="extra-block">
+            <h2>Цели операции</h2>
+            <ul class="plain-list objective-list" id="objective-list">
+                {% for objective in objectives %}
+                    <li data-objective-id="{{ objective.id }}" class="{% if objective.is_completed %}done{% endif %}">
+                        <p>{{ objective.text }}</p>
+                        <div class="objective-progress">
+                            <span class="objective-progress-bar" style="width: {{ objective.progress }}%"></span>
+                        </div>
+                        <small class="objective-progress-value">{{ objective.progress }}%</small>
+                    </li>
+                {% endfor %}
+            </ul>
+        </article>
+        <article class="extra-block">
+            <h2>Оперативные сводки</h2>
+            <ul class="plain-list report-list" id="report-list">
+                {% for report in reports %}
+                    <li data-report-index="{{ forloop.counter0 }}">
+                        <strong class="report-title">{{ report.title }}</strong>
+                        <p class="report-text">{{ report.text }}</p>
+                        <span class="state report-state">{{ report.state }}</span>
+                    </li>
+                {% endfor %}
+            </ul>
+        </article>
+    </section>
+
+    <section class="card errors-card">
+        <h2>Возможные ошибки</h2>
+        <ul class="plain-list" id="error-list">
+            {% for item in error_catalog %}
+                <li>
+                    <strong>{{ item.code }}</strong>
+                    <p>{{ item.text }}</p>
+                </li>
+            {% endfor %}
+        </ul>
+    </section>
+
+    <section class="card log-panel">
+        <h2>Журнал решений</h2>
+        <ul class="log-list" id="decision-list">
+            {% for item in decision_log %}
+                <li>
+                    <span>{{ item.time }}</span>
+                    <p>{{ item.text }}</p>
+                </li>
+            {% endfor %}
+        </ul>
+    </section>
+</div>
+
+<section class="game-over-overlay{% if not is_game_over %} is-hidden{% endif %}" id="game-over-overlay">
+    <div class="game-over-card">
+        <h2 id="game-over-title">{% if status == "won" %}Операция завершена: победа{% else %}Операция завершена{% endif %}</h2>
+        <p id="game-over-reason">
+            {% if end_reason %}
+                {{ end_reason }}
+            {% else %}
+                Операция в процессе.
+            {% endif %}
+        </p>
+        <button id="overlay-restart-btn" class="simulate-btn danger" type="button">Запустить заново</button>
+    </div>
+</section>
+
+<script src="{% static 'simulator/js/dashboard.js' %}"></script>
+</body>
+</html>
